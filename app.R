@@ -37,14 +37,13 @@ ui <- fluidPage(
                                    width = "50%",
                                    placeholder = "C:/Users/...."),
         actionButton("Add_dataset", "Save dataset in program", size="sm", color="warning"),
-        inputDataText <- textInput("inputDataVar", label = "Cohort Criteria", value = "",
-                                   width = "50%", placeholder = "Traumatic Brain Injury, heart failure, stroke etc."),
        verbatimTextOutput(outputId = "datasets"),
-       tags$h3('Please enter a variable and indicate dependent or independent'),
-       textInput('variable1', 'Variable 1'),
-       radioButtons("varType1", 'Variable Type', c("Dependent", "Independent")),
-       textInput('variable2', 'Variable 2'),
-       radioButtons('varType2', 'Variable Type', c("Dependent", "Independent")),
+       tags$h3('Please enter your variables and save after each one'),
+       textInput('variable1', 'Independent Variable'),
+       textInput('variable2', 'Dependent Variables'),
+       actionButton("Add_variables", "Save variables in program", size = "sm", color="warning"),
+       verbatimTextOutput(outputId = "independentVars"),
+       verbatimTextOutput(outputId = "dependentVars"),
        selectInput("selectAnalysis", "Analysis to perform", c("ANOVA", "T-Test", "Linear Regression", "Logistic Regression",
                                                               "Poisson Logistic Regression", "Cox Logistic Regression")),
        actionButton('run', 'Run'),
@@ -73,11 +72,13 @@ ui <- fluidPage(
 server <- function(input, output, session) {
   l <- reactiveValues()
   l$dataplots <- list()
+  l$dependentVars <- list()
+  l$independentVars <- list()
+  l$firstIndependent <- NULL
   
   
   #Observer to watch the save dataset button, adds the filepath to a list then reads the CSV and puts it into a dataframe
   observeEvent(input$Add_dataset, { 
-    removeModal()
     l$filePath <- input$inputDataText
     l$dataplots[l$filePath] <- l$filePath
   #  df <- read.csv(l$filePath)   ##Need to include a check here to ensure the file exists, if not throws an error instead of crashing
@@ -90,19 +91,37 @@ server <- function(input, output, session) {
     })
   })
   
+  observeEvent(input$Add_variables, {
+    l$dependent <- input$variable2
+    l$independent <- input$variable1
+    if (is.null(l$firstIndependent)){
+      l$firstIndependent <- l$independent
+    }
+    if (!l$dependent %in% l$dependentVars){
+      l$dependentVars[l$dependent] <- l$dependent
+    }
+    if (!l$independent %in% l$independentVars){
+      l$independentVars[l$independent] <- l$independent
+    }
+    
+    output$dependentVars <- renderPrint({
+      if (is.null(l$dependentVars)) return (NULL)
+      paste(l$dependentVars)
+    })
+    
+    output$independentVars <- renderPrint({
+      if (is.null(l$independentVars)) return (NULL)
+      paste(l$independentVars)
+    })
+    
+  })
+  
   
   #Puts an observer pattern on the run button, performs most functional requirements 
   observeEvent(input$run, {
-    removeModal()
 
     #takes the user inputted variable in the pop out menu and 
     #assigns them to a variable in l that can be accessed by UI
-    l$variable1 <- input$variable1
-    l$variable2 <- input$variable2
-    variable1 <- l$variable1
-    variable2 <- l$variable2
-    l$varType1 <- input$varType1
-    l$varType2 <- input$varType2
     l$plot <- input$plot
     l$analysisType <- input$selectAnalysis
     
@@ -115,94 +134,68 @@ server <- function(input, output, session) {
         count <- 1
       }
       else{
-        serverFrame <<- merge(serverFrame, df2, by = variable1)
+        serverFrame <<- merge(serverFrame, df2, by = l$firstIndependent)
       }
     }
-
 
     
     #Selection of specific analysis algorithm
     if (l$analysisType == "ANOVA"){
-      if (l$varType1 == 'Independent'){
-        
-      }
-      else if (l$varType2 == 'Independent'){
-        
-      }
     }
     else if (l$analysisType == "T-Test"){
-      if (l$varType1 == 'Independent'){
-        
-      }
-      else if (l$varType2 == 'Independent'){
-        
-      }
+
     }
     else if (l$analysisType == "Linear Regression"){
-      if (l$varType1 == 'Independent'){
-       
-      }
-      else if (l$varType2 == 'Independent'){
-        
-      }
+
     }
     else if (l$analysisType == "Poisson Logistic Regression"){
-      if (l$varType1 == 'Independent'){
-        
-      }
-      else if (l$varType2 == 'Independent'){
-        
-      }
+      formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
+      cyclopsData <- createCyclopsData(formula, modelType = "pr", data = serverFrame)
+      cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
+      coefficient <- coef(cyclopsFit)
+      prediction <- predict(cyclopsFit)
+      l$prediction <- prediction
+      output$summary <- renderPrint({
+        if (is.null(l$prediction)) return (NULL)
+        paste(summary(l$prediction))
+      })
+      
     }
     else if (l$analysisType == "Cox Logistic Regression"){
-      if (l$varType1 == 'Independent'){
-        
-      }
-      else if (l$varType2 == 'Independent'){
-        
-      }
+      formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
+      cyclopsData <- createCyclopsData(formula,time = serverFrame[[l$dependent]], modelType = "cox", data = serverFrame)
+     # print("sanity check")
+       cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
+     #  print(summary(cyclopsFit))
+     # coefficient <- coef(cyclopsFit)
+      prediction <- predict(cyclopsFit)
+      l$prediction <- prediction
+      output$summary <- renderPrint({
+        if (is.null(l$prediction)) return (NULL)
+        paste(summary(l$prediction))
+      })
     }
     else if (l$analysisType == "Logistic Regression"){
-      if (l$varType1 == 'Independent'){
-        cyclopsData <- createCyclopsData(serverFrame[[variable2]] ~ serverFrame[[variable1]], modelType = "lr")
+      formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
+        cyclopsData <- createCyclopsData(formula, modelType = "lr", data = serverFrame)
       #  print(summary(cyclopsData))
         cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
        # print("test", summary(cyclopsFit))
-       # coefficient <- coef(cyclopsFit)
-      #  confidence <- confint(cyclopsFit, c(variable1,variable2))
+        coefficient <- coef(cyclopsFit)
+      #  print(coefficient)
+      #  confidence <- confint(cyclopsFit, names(l$independentVars))
       #  print("confidence", confidence)
         prediction <- predict(cyclopsFit)
       #  print("prediction", prediction)
-        print("uhhhhhh why no print")
        # print(prediction)
         l$prediction <- prediction
       #  print(l$prediction)
         output$summary <- renderPrint({
         #  print("Testing our output", l$prediction)
-        #  if (is.null(l$prediction)) return (NULL)
+          if (is.null(l$prediction)) return (NULL)
           paste(summary(l$prediction))
         })
-      }
-      else if (l$varType2 == 'Independent'){
-        cyclopsData <- createCyclopsData(serverFrame[[variable1]] ~ serverFrame[[variable2]], modelType = "lr")
-        #  print(summary(cyclopsData))
-        cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
-        # print("test", summary(cyclopsFit))
-        # coefficient <- coef(cyclopsFit)
-        #  confidence <- confint(cyclopsFit, c(variable1,variable2))
-        #  print("confidence", confidence)
-        prediction <- predict(cyclopsFit)
-        #  print("prediction", prediction)
-        print("uhhhhhh why no print")
-        # print(prediction)
-        l$prediction <- prediction
-        #  print(l$prediction)
-        output$summary <- renderPrint({
-          #  print("Testing our output", l$prediction)
-          #  if (is.null(l$prediction)) return (NULL)
-          paste(summary(l$prediction))
-        })
-      }
+      
     }
    
     
@@ -224,7 +217,7 @@ server <- function(input, output, session) {
   output$text <- renderPrint({
     if (is.null(l$variable1)) return (NULL)
     if (is.null(l$variable2)) return (NULL)
-    paste('Variable 1:', l$variable1, l$varType1, 'Variable 2:', l$variable2, l$varType2)
+    paste('Variable 1:', l$variable1, 'Variable 2:', l$variable2)
   
   })
   
