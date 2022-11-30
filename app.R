@@ -45,8 +45,8 @@ ui <- fluidPage(
        radioButtons("varType1", 'Variable Type', c("Dependent", "Independent")),
        textInput('variable2', 'Variable 2'),
        radioButtons('varType2', 'Variable Type', c("Dependent", "Independent")),
-       selectInput("selectAnalysis", "Analysis to perform", c("ANOVA", "T-Test", "Linear Regression",
-                                                              "Poisson Linear Regression", "Cox Linear Regression")),
+       selectInput("selectAnalysis", "Analysis to perform", c("ANOVA", "T-Test", "Linear Regression", "Logistic Regression",
+                                                              "Poisson Logistic Regression", "Cox Logistic Regression")),
        actionButton('run', 'Run'),
       ),
       
@@ -105,8 +105,19 @@ server <- function(input, output, session) {
     l$varType2 <- input$varType2
     l$plot <- input$plot
     l$analysisType <- input$selectAnalysis
-  #  var1DF <- serverFrame[ , l$variable1]
-  #  var2DF <- serverFrame[ , l$variable2]
+    
+    count <- 0
+    for (csv in l$dataplots){
+      df <- read.csv(csv)   ##Need to include a check here to ensure the file exists, if not throws an error instead of crashing
+      df2 <- data.frame(df)
+      if (count == 0){
+        serverFrame <<- df2
+        count <- 1
+      }
+      else{
+        serverFrame <<- merge(serverFrame, df2, by = variable1)
+      }
+    }
 
 
     
@@ -129,50 +140,68 @@ server <- function(input, output, session) {
     }
     else if (l$analysisType == "Linear Regression"){
       if (l$varType1 == 'Independent'){
-        count <- 0
-        for (csv in l$dataplots){
-          df <- read.csv(csv)   ##Need to include a check here to ensure the file exists, if not throws an error instead of crashing
-          df2 <- data.frame(df)
-          if (count == 0){
-            serverFrame <<- df2
-            count <- 1
-          }
-          else{
-            serverFrame <<- merge(serverFrame, df2, by = variable1)
-          }
-        }
-        cyclopsData <- createCyclopsData(serverFrame[[variable2]] ~ serverFrame[[variable1]], modelType = "lr", data = serverFrame)
-        print(summary(cyclopsData))
-        cyclopsFit <- fitCyclopsModel(cyclopsData)
-        coefficient <- coef(cyclopsFit)
-        print(coefficient)
-        confidence <- confint(cyclopsFit, c(variable1,variable2))
-        print(confidence)
+       
+      }
+      else if (l$varType2 == 'Independent'){
+        
+      }
+    }
+    else if (l$analysisType == "Poisson Logistic Regression"){
+      if (l$varType1 == 'Independent'){
+        
+      }
+      else if (l$varType2 == 'Independent'){
+        
+      }
+    }
+    else if (l$analysisType == "Cox Logistic Regression"){
+      if (l$varType1 == 'Independent'){
+        
+      }
+      else if (l$varType2 == 'Independent'){
+        
+      }
+    }
+    else if (l$analysisType == "Logistic Regression"){
+      if (l$varType1 == 'Independent'){
+        cyclopsData <- createCyclopsData(serverFrame[[variable2]] ~ serverFrame[[variable1]], modelType = "lr")
+      #  print(summary(cyclopsData))
+        cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
+       # print("test", summary(cyclopsFit))
+       # coefficient <- coef(cyclopsFit)
+      #  confidence <- confint(cyclopsFit, c(variable1,variable2))
+      #  print("confidence", confidence)
         prediction <- predict(cyclopsFit)
-        print(prediction)
+      #  print("prediction", prediction)
+        print("uhhhhhh why no print")
+       # print(prediction)
+        l$prediction <- prediction
+      #  print(l$prediction)
         output$summary <- renderPrint({
-          if (is.null(cyclopsData)) return (NULL)
-          paste(summary(cyclopsData))
+        #  print("Testing our output", l$prediction)
+        #  if (is.null(l$prediction)) return (NULL)
+          paste(summary(l$prediction))
         })
       }
       else if (l$varType2 == 'Independent'){
-        
-      }
-    }
-    else if (l$analysisType == "Poisson Linear Regression"){
-      if (l$varType1 == 'Independent'){
-        
-      }
-      else if (l$varType2 == 'Independent'){
-        
-      }
-    }
-    else if (l$analysisType == "Cox Linear Regression"){
-      if (l$varType1 == 'Independent'){
-        
-      }
-      else if (l$varType2 == 'Independent'){
-        
+        cyclopsData <- createCyclopsData(serverFrame[[variable1]] ~ serverFrame[[variable2]], modelType = "lr")
+        #  print(summary(cyclopsData))
+        cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
+        # print("test", summary(cyclopsFit))
+        # coefficient <- coef(cyclopsFit)
+        #  confidence <- confint(cyclopsFit, c(variable1,variable2))
+        #  print("confidence", confidence)
+        prediction <- predict(cyclopsFit)
+        #  print("prediction", prediction)
+        print("uhhhhhh why no print")
+        # print(prediction)
+        l$prediction <- prediction
+        #  print(l$prediction)
+        output$summary <- renderPrint({
+          #  print("Testing our output", l$prediction)
+          #  if (is.null(l$prediction)) return (NULL)
+          paste(summary(l$prediction))
+        })
       }
     }
    
@@ -188,11 +217,7 @@ server <- function(input, output, session) {
 
   
     })
-    
-    output$summary <- renderPrint({
-      if (is.null(l$summary)) return (NULL)
-      paste(l$summary)
-    })
+  
   })
   
   #Mostly used for debugging purposes atm, returns user input to UI to be displayed
