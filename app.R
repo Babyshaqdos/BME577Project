@@ -41,6 +41,8 @@ ui <- fluidPage(
        tags$h3('Please enter your variables and save after each one'),
        textInput('variable1', 'Independent Variable'),
        textInput('variable2', 'Dependent Variables'),
+       textInput('pvalue', 'P-Value/Mean (if necessary)'),
+       textInput('joinVar', 'Column name to join on'),
        actionButton("Add_variables", "Save variables in program", size = "sm", color="warning"),
        verbatimTextOutput(outputId = "independentVars"),
        verbatimTextOutput(outputId = "dependentVars"),
@@ -76,7 +78,8 @@ server <- function(input, output, session) {
   l$dependentVars <- list() #Holds the dependent variables
   l$independentVars <- list() #Holds the independent variables
   l$firstIndependent <- NULL #Will want to revisit, used to hold the first independent variable to be used as criteria for joining of csv files
-  
+  l$joiner <- NULL
+  l$pval <- NULL
   
   #Observer to watch the save dataset button, adds the filepath to a list then reads the CSV and places it into the list
   observeEvent(input$Add_dataset, { 
@@ -95,6 +98,8 @@ server <- function(input, output, session) {
     #Save user input variables to a server side variable
     l$dependent <- input$variable2
     l$independent <- input$variable1
+    l$joiner <- input$joinVar
+    l$pval <- input$pvalue
     
     #Checks if an independent variable is saved to first independent, saves it if the first independent is null
     if (is.null(l$firstIndependent)){
@@ -144,7 +149,10 @@ server <- function(input, output, session) {
         count <- 1
       }
       else{
-        serverFrame <<- merge(serverFrame, df2, by = l$firstIndependent)
+        if (is.null(l$joiner)){
+          stop("Did not indicate the columns to merge on")
+        }
+        serverFrame <<- merge(serverFrame, df2, by = l$joiner)
       }
     }
 
@@ -164,10 +172,32 @@ server <- function(input, output, session) {
     }
     #T-Test: Determines whether the means of two groups (sampled with normal distributions with equal variance) are equivalent
     else if (l$analysisType == "T-Test"){
-
+      if (is.null(l$pval)){ #If no mean is given, 2 sample test is assumed
+        var1 <- l$independentVars[[1]]
+        var2 <- l$independentVars[[2]]
+        t_test <- t.test(serverFrame[[var1]], serverFrame[[var2]], paired = TRUE)
+      }
+      else{ #If mean given, 1 sample test is assumed
+        var3 <- l$independentVars[[1]]
+        print(l$independentVars[[1]])
+        meanVal <- l$pval
+        t_test <- t.test(as.numeric(serverFrame[[var3]]), mu = as.numeric(meanVal))
+      }
+      l$t_test <- t_test
+      output$summary <- renderPrint({
+        if (is.null(l$t_test)) return (NULL)
+        paste(l$t_test)
+      })
     }
+    #Linear Regression: Analyses relationship between independent variable and 1 or more dependent variable 
     else if (l$analysisType == "Linear Regression"){
-
+      formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
+      linearReg <- lm(formula, data = serverFrame)
+      l$linearReg <- linearReg
+      output$summary <- renderPrint({
+        if (is.null(l$linearReg)) return (NULL)
+        paste(summary(l$linearReg))
+      })
     }
     #Poisson Logistic Regression: Similar to logistic regression but used when the outcome variable (dependent) is a count or rate of an event
     else if (l$analysisType == "Poisson Logistic Regression"){
