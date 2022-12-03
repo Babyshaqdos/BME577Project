@@ -14,9 +14,9 @@ library(dplyr)
 library(gsubfn)
 library(RSQLite)
 library(remotes)
-library("CohortGenerator")
 library("Cyclops")
-#install_github("ohdsi/Hades", upgrade = "always")
+ 
+#install_github("ohdsi/Hades", upgrade = "always") 
 
 serverFrame <- data.frame()
 
@@ -26,7 +26,7 @@ ui <- fluidPage(
     # Application title
     titlePanel("Visual and Qualitative analysis of CSV Datasets"),
     
-    #Layout defines the top portion of the UI
+    #Layout defines the left side of the UI
     sidebarLayout(
       
       #This panel defines top left portion of UI, allows for user input of dataset and analysis option
@@ -36,7 +36,7 @@ ui <- fluidPage(
                                    value ="",
                                    width = "50%",
                                    placeholder = "C:/Users/...."),
-        actionButton("Add_dataset", "Save dataset in program", size="sm", color="warning"),
+       actionButton("Add_dataset", "Save dataset in program", size="sm", color="warning"),
        verbatimTextOutput(outputId = "datasets"),
        tags$h3('Please enter your variables and save after each one'),
        textInput('variable1', 'Independent Variable'),
@@ -45,7 +45,7 @@ ui <- fluidPage(
        verbatimTextOutput(outputId = "independentVars"),
        verbatimTextOutput(outputId = "dependentVars"),
        selectInput("selectAnalysis", "Analysis to perform", c("ANOVA", "T-Test", "Linear Regression", "Logistic Regression",
-                                                              "Poisson Logistic Regression", "Cox Logistic Regression")),
+                                                              "Poisson Logistic Regression", "Cox Proportional Hazards Regression")),
        actionButton('run', 'Run'),
       ),
       
@@ -68,22 +68,21 @@ ui <- fluidPage(
     
 )
 
-# Define server logic required to draw a histogram
+# Hosts the R server, performs all of the logic in the application and outputs the results to the user
 server <- function(input, output, session) {
-  l <- reactiveValues()
-  l$dataplots <- list()
-  l$dependentVars <- list()
-  l$independentVars <- list()
-  l$firstIndependent <- NULL
+  
+  l <- reactiveValues() #Allows us to access our variables inputted by the user into the UI
+  l$dataplots <- list() #Holds the CSV files
+  l$dependentVars <- list() #Holds the dependent variables
+  l$independentVars <- list() #Holds the independent variables
+  l$firstIndependent <- NULL #Will want to revisit, used to hold the first independent variable to be used as criteria for joining of csv files
   
   
-  #Observer to watch the save dataset button, adds the filepath to a list then reads the CSV and puts it into a dataframe
+  #Observer to watch the save dataset button, adds the filepath to a list then reads the CSV and places it into the list
   observeEvent(input$Add_dataset, { 
+    #Save user input CSV to server side variable, then place variable into new position in csv list
     l$filePath <- input$inputDataText
     l$dataplots[l$filePath] <- l$filePath
-  #  df <- read.csv(l$filePath)   ##Need to include a check here to ensure the file exists, if not throws an error instead of crashing
-  #  df2 <- data.frame(df)
-  #  serverFrame <<- bind_rows(df2, serverFrame)
 
     output$datasets <- renderPrint({ #Data check
       if (is.null(l$dataplots)) return (NULL)
@@ -91,12 +90,17 @@ server <- function(input, output, session) {
     })
   })
   
+  #Observer to watch the save variables button, checks if the appropriate lists contain the variable and adds it if it does not
   observeEvent(input$Add_variables, {
+    #Save user input variables to a server side variable
     l$dependent <- input$variable2
     l$independent <- input$variable1
+    
+    #Checks if an independent variable is saved to first independent, saves it if the first independent is null
     if (is.null(l$firstIndependent)){
       l$firstIndependent <- l$independent
     }
+    #Data checks, ensures the variable lists only contain 1 of each variable
     if (!l$dependent %in% l$dependentVars){
       l$dependentVars[l$dependent] <- l$dependent
     }
@@ -104,11 +108,12 @@ server <- function(input, output, session) {
       l$independentVars[l$independent] <- l$independent
     }
     
+    #Dependent Variables data check
     output$dependentVars <- renderPrint({
       if (is.null(l$dependentVars)) return (NULL)
       paste(l$dependentVars)
     })
-    
+    #independent variables data check
     output$independentVars <- renderPrint({
       if (is.null(l$independentVars)) return (NULL)
       paste(l$independentVars)
@@ -120,16 +125,21 @@ server <- function(input, output, session) {
   #Puts an observer pattern on the run button, performs most functional requirements 
   observeEvent(input$run, {
 
-    #takes the user inputted variable in the pop out menu and 
-    #assigns them to a variable in l that can be accessed by UI
-    l$plot <- input$plot
-    l$analysisType <- input$selectAnalysis
+  #  l$plot <- input$plot
+    l$analysisType <- input$selectAnalysis #Gets the user selected analysis option and assigns it to a server side variable
     
+    #Loop through our list of csv files, read them into a data frame then merge them by the first user input independent variable
     count <- 0
     for (csv in l$dataplots){
-      df <- read.csv(csv)   ##Need to include a check here to ensure the file exists, if not throws an error instead of crashing
+      #Check to ensure file exists (Will need to rework to display error to user in App instead of using Stop)
+      if (!file.exists(csv)){
+        stop("File not found, please check file path") #Prints the message to the R Studio console and stops program
+      }
+      #Reads csv and places into a data frame
+      df <- read.csv(csv)   
       df2 <- data.frame(df)
-      if (count == 0){
+      #Adds data frame to serverFrame
+      if (count == 0){ 
         serverFrame <<- df2
         count <- 1
       }
@@ -140,77 +150,70 @@ server <- function(input, output, session) {
 
     
     #Selection of specific analysis algorithm
+    #ANOVA: estimates how a quantitative dependent variable is affected by different levels of categorical independent variable(s)
     if (l$analysisType == "ANOVA"){
+      #Grab values from dependent and independent lists 
+      var1 <- l$dependentVars[[1]]
+      var2 <- l$independentVars[[1]]
+      anova <- aov(serverFrame[[var1]] ~ serverFrame[[var2]], data = serverFrame)
+      l$anova <- anova
+      output$summary <- renderPrint({ #Data Check
+        if (is.null(l$anova)) return (NULL)
+        paste(summary(l$anova))
+      })
     }
+    #T-Test: Determines whether the means of two groups (sampled with normal distributions with equal variance) are equivalent
     else if (l$analysisType == "T-Test"){
 
     }
     else if (l$analysisType == "Linear Regression"){
 
     }
+    #Poisson Logistic Regression: Similar to logistic regression but used when the outcome variable (dependent) is a count or rate of an event
     else if (l$analysisType == "Poisson Logistic Regression"){
       formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
       cyclopsData <- createCyclopsData(formula, modelType = "pr", data = serverFrame)
       cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
-      coefficient <- coef(cyclopsFit)
+     #coefficient <- coef(cyclopsFit) #coef might not be necessary, gives us x intercept and slope
       prediction <- predict(cyclopsFit)
       l$prediction <- prediction
-      output$summary <- renderPrint({
+      output$summary <- renderPrint({ #Data check, prints summary of predictions to UI
         if (is.null(l$prediction)) return (NULL)
         paste(summary(l$prediction))
       })
       
     }
-    else if (l$analysisType == "Cox Logistic Regression"){
+    #Cox Proportional Hazards Regression: Method of investing effects of multiple variables upon the timing of a specific event
+    else if (l$analysisType == "Cox Proportional Hazards Regression"){
       formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
       cyclopsData <- createCyclopsData(formula,time = serverFrame[[l$dependent]], modelType = "cox", data = serverFrame)
-     # print("sanity check")
-       cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
-     #  print(summary(cyclopsFit))
-     # coefficient <- coef(cyclopsFit)
+      cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
+     #coefficient <- coef(cyclopsFit) #coef might not be necessary, gives us x intercept and slope
       prediction <- predict(cyclopsFit)
       l$prediction <- prediction
-      output$summary <- renderPrint({
+      output$summary <- renderPrint({ #Data check, prints summary of predictions to UI
         if (is.null(l$prediction)) return (NULL)
         paste(summary(l$prediction))
       })
     }
+    #Logistic Regression: Models probability of a dependent event occurring based on independent variables
     else if (l$analysisType == "Logistic Regression"){
       formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
-        cyclopsData <- createCyclopsData(formula, modelType = "lr", data = serverFrame)
-      #  print(summary(cyclopsData))
-        cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
-       # print("test", summary(cyclopsFit))
-        coefficient <- coef(cyclopsFit)
-      #  print(coefficient)
-      #  confidence <- confint(cyclopsFit, names(l$independentVars))
-      #  print("confidence", confidence)
-        prediction <- predict(cyclopsFit)
-      #  print("prediction", prediction)
-       # print(prediction)
-        l$prediction <- prediction
-      #  print(l$prediction)
-        output$summary <- renderPrint({
-        #  print("Testing our output", l$prediction)
-          if (is.null(l$prediction)) return (NULL)
-          paste(summary(l$prediction))
-        })
+      cyclopsData <- createCyclopsData(formula, modelType = "lr", data = serverFrame)
+      cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
+      #coefficient <- coef(cyclopsFit) #might not be necessary
       
-    }
-   
-    
-    
-    
-    
-    
-    
-    
-    
-     output$plot <- renderPlot({
+      #Struggled to get confint to work, not required but useful for analysis. Gives confidence interval for each variable
+      #Function could not find matching covariates, will revisit if time permits
+      #confidence <- confint(cyclopsFit, names(l$independentVars)) 
 
-  
-    })
-  
+      prediction <- predict(cyclopsFit)
+      l$prediction <- prediction
+      output$summary <- renderPrint({ #Data check
+        if (is.null(l$prediction)) return (NULL)
+        paste(summary(l$prediction))
+      })
+    }
   })
   
   #Mostly used for debugging purposes atm, returns user input to UI to be displayed
