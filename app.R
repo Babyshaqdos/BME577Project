@@ -14,6 +14,10 @@ library(dplyr)
 library(gsubfn)
 library(RSQLite)
 library(remotes)
+library(tidyverse)
+library(gginference)
+library(rstatix)
+library("broom")
 library("Cyclops")
  
 #install_github("ohdsi/Hades", upgrade = "always") 
@@ -56,7 +60,7 @@ ui <- fluidPage(
         tabsetPanel(
           tabPanel("Plot", plotOutput("plot")),
           tabPanel("Summary", verbatimTextOutput(outputId = "summary")),
-          tabPanel("Table", tableOutput("table"))
+          tabPanel("Table", verbatimTextOutput("table"))
         )
       )
     ),
@@ -156,7 +160,7 @@ server <- function(input, output, session) {
       }
     }
 
-    
+    #Test Data: field_data.csv
     #Selection of specific analysis algorithm
     #ANOVA: estimates how a quantitative dependent variable is affected by different levels of categorical independent variable(s)
     if (l$analysisType == "ANOVA"){
@@ -165,38 +169,108 @@ server <- function(input, output, session) {
       var2 <- l$independentVars[[1]]
       anova <- aov(serverFrame[[var1]] ~ serverFrame[[var2]], data = serverFrame)
       l$anova <- anova
-      output$summary <- renderPrint({ #Data Check
+      output$summary <- renderText({ #Data Check
         if (is.null(l$anova)) return (NULL)
-        paste(summary(l$anova))
+        if (l$pval > summary(anova)[[1]][[1, "Pr(>F)"]]){
+          paste(output)
+        }
+        else{
+          paste("The ANOVA P value is less than or equivalent to the provided p value, therefore we reject the null hypothesis",
+          "We conclude that the independent variable does seem to have an affect on the dependent variable.", sep = '\n')
+        }
+      })
+      output$table <- renderPrint({
+        if (is.null(l$anova)) return (NULL)
+        anova_table <- as.data.frame(summary(anova)[[1]])
+        paste(anova_table)
+        
+      })
+      output$plot <- renderPlot({
+        if (is.null(l$anova)) return (NULL)
+        par(mfrow=c(2,2))
+        plot(anova)
+        par(mfrow=c(1,1))
       })
     }
+    #Test Data: weight.csv (1 sample t test)
     #T-Test: Determines whether the means of two groups (sampled with normal distributions with equal variance) are equivalent
     else if (l$analysisType == "T-Test"){
-      if (is.null(l$pval)){ #If no mean is given, 2 sample test is assumed
+      if (is.null(l$pval) || l$pval == ""){ #If no mean is given, 2 sample test is assumed
         var1 <- l$independentVars[[1]]
         var2 <- l$independentVars[[2]]
         t_test <- t.test(serverFrame[[var1]], serverFrame[[var2]], paired = TRUE)
+        tPlot <- ggboxplot(serverFrame, x = var1, y = var2, ylab = var2, xlab = var1, add = "jitter")
       }
       else{ #If mean given, 1 sample test is assumed
         var3 <- l$independentVars[[1]]
-        print(l$independentVars[[1]])
         meanVal <- l$pval
         t_test <- t.test(as.numeric(serverFrame[[var3]]), mu = as.numeric(meanVal))
+        tPlot <- ggdensity(serverFrame, x = var3, rug = TRUE, fill = 'lightgray') +
+          scale_x_discrete(limits = c(0, length(serverFrame[[var3]]))) + stat_central_tendency(type = "mean", color = "red", linetype = "dashed") +
+          geom_vline(xintercept = meanVal, color = "blue", linetype = "dashed")
       }
       l$t_test <- t_test
-      output$summary <- renderPrint({
+      output$summary <- renderText({
+        if (is.null(l$t_test)) return (NULL)
+        if (l$pval > .05){
+          paste("The T-Test p value is greater than .05 we fail to reject the null hypothesis.",
+          "The mean of the variables does not show variance", sep = '\n')
+        }
+        else{
+          paste("The T-Test p value is less than .05 therefore we reject the null hypothesis.",
+          "The evidence is sufficient to say the mean of the variables is different", sep='\n')
+        }
+      })
+      output$plot <- renderPlot({
+        if (is.null(l$t_test)) return (NULL)
+        plot(tPlot)
+      })
+      output$table <- renderPrint({
         if (is.null(l$t_test)) return (NULL)
         paste(l$t_test)
       })
     }
+    #Test Data: Social Network Ads
     #Linear Regression: Analyses relationship between independent variable and 1 or more dependent variable 
     else if (l$analysisType == "Linear Regression"){
       formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
       linearReg <- lm(formula, data = serverFrame)
       l$linearReg <- linearReg
+      reg_table <- data.frame("Estimate" = coef(l$linearReg), "Std.Error" = summary(l$linearReg)$coefficients[, "Std. Error"],
+                              "t.value" = summary(l$linearReg)$coefficients[, "t value"], "P.value" = summary(l$linearReg)$coefficients[, "Pr(>|t|)"])
+      for (variable in reg_table$P.value){
+        print(variable)
+      }
+      output$table <- renderText({
+        if (is.null(l$linearReg)) return (NULL)
+        paste(capture.output(print(reg_table, row.names = TRUE)), collapse = "\n")
+      })
+      output$plot <- renderPlot({
+        if (is.null(l$linearReg)) return (NULL)
+        plot(l$linearReg)
+        
+      })
       output$summary <- renderPrint({
         if (is.null(l$linearReg)) return (NULL)
-        paste(summary(l$linearReg))
+        fstat <- summary(l$linearReg)$fstatistic
+        strOutput <- ""
+        countVars <- 0
+        sigVars <-0
+        for (variable in reg_table$P.value){
+          if (variable >= .05){
+            strOutput <- cat(strOutput, " variable ", countVars,  " has a p value greater than or equal to .05 and should be significant")
+            strOutput <- cat(strOutput, "\n")
+            sigVars <- sigVars + 1
+          }
+          else{
+            strOutput <- cat(strOutput, " variable ", countVars, " has a p value less than .05 and should not be considered significant")
+            strOutput <- cat(strOutput, "\n")
+          }
+          countVars <- countVars + 1
+        }
+        varStr <- "We have a total of "
+        varStr <- cat(varStr, sigVars, " significant variables")
+        paste(strOutput, varStr, sep = "\n")
       })
     }
     #Poisson Logistic Regression: Similar to logistic regression but used when the outcome variable (dependent) is a count or rate of an event
