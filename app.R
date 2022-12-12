@@ -17,6 +17,13 @@ library(remotes)
 library(tidyverse)
 library(gginference)
 library(rstatix)
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+#BiocManager::install("survcomp")
+library(survcomp)
+library(finalfit)
+library(sandwich)
 library("broom")
 library("Cyclops")
  
@@ -51,7 +58,7 @@ ui <- fluidPage(
        verbatimTextOutput(outputId = "independentVars"),
        verbatimTextOutput(outputId = "dependentVars"),
        selectInput("selectAnalysis", "Analysis to perform", c("ANOVA", "T-Test", "Linear Regression", "Logistic Regression",
-                                                              "Poisson Logistic Regression", "Cox Proportional Hazards Regression")),
+                                                              "Poisson Regression", "Cox Proportional Hazards Regression")),
        actionButton('run', 'Run'),
       ),
       
@@ -60,7 +67,10 @@ ui <- fluidPage(
         tabsetPanel(
           tabPanel("Plot", plotOutput("plot")),
           tabPanel("Summary", verbatimTextOutput(outputId = "summary")),
-          tabPanel("Table", verbatimTextOutput("table"))
+          tabPanel("Table",
+                   fluidRow(column(12, verbatimTextOutput("table"))),
+                  fluidRow(column(12, verbatimTextOutput("table2")))
+          )
         )
       )
     ),
@@ -108,6 +118,10 @@ server <- function(input, output, session) {
     #Checks if an independent variable is saved to first independent, saves it if the first independent is null
     if (is.null(l$firstIndependent)){
       l$firstIndependent <- l$independent
+    }
+    
+    if (is.null(l$firstDependent)) {
+      l$firstDependent <- l$dependent
     }
     #Data checks, ensures the variable lists only contain 1 of each variable
     if (!l$dependent %in% l$dependentVars){
@@ -273,31 +287,147 @@ server <- function(input, output, session) {
         paste(strOutput, varStr, sep = "\n")
       })
     }
+    #Test Data: framingham
     #Poisson Logistic Regression: Similar to logistic regression but used when the outcome variable (dependent) is a count or rate of an event
-    else if (l$analysisType == "Poisson Logistic Regression"){
+    else if (l$analysisType == "Poisson Regression"){
+      serverFrame[is.na(serverFrame)] <- 0
       formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
       cyclopsData <- createCyclopsData(formula, modelType = "pr", data = serverFrame)
       cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
-     #coefficient <- coef(cyclopsFit) #coef might not be necessary, gives us x intercept and slope
-      prediction <- predict(cyclopsFit)
+      coefficient <- coef(cyclopsFit, rescale = FALSE, ignoreConvergence = TRUE) 
+      l$coefficient <- coefficient
+      prediction <- predict(cyclopsFit, interval = "prediction", se.fit = TRUE, type = "link")
       l$prediction <- prediction
-      output$summary <- renderPrint({ #Data check, prints summary of predictions to UI
-        if (is.null(l$prediction)) return (NULL)
-        paste(summary(l$prediction))
-      })
+      l$cyclops <- cyclopsFit
       
+      #Grabbing residuals?
+      depend <- names(l$dependentVars)[1]
+      originalVar <- serverFrame[depend]
+      predDF <- data.frame(Predictions = prediction)
+      residualDF <- data.frame(Residual = numeric())
+      residualDF <- originalVar - predDF
+      
+      
+      #Create a data frame to hold all locally relevant information
+      newDF <- data.frame(Dependent_Variable = serverFrame[names(l$dependentVars)[1]])
+      for (var in names(l$independentVars)){
+        newDF <- cbind(newDF, serverFrame[var])
+      }
+
+      #Normalize our predictor variables so they are between 0 and 1
+      min_max_norm <- function(x) {
+        (x - min(x)) / (max(x) - min(x))
+      }
+      normDF <- as.data.frame(lapply(newDF[2:length(newDF)], min_max_norm))
+
+      #Join normalized variables with predictions
+      newDF <- cbind(newDF[1], normDF)
+      newDF <- cbind(newDF, predDF)
+      
+      #Create data frame to hold original observation and calculated residual 
+      plotDF <- cbind(originalVar, residualDF)
+      
+      #Create column names to access data
+      colnames(plotDF) <- c("Original", "Residual")
+      colnames(newDF) <- c("Dependent_Variable", paste("Independent_Variable", 1:(ncol(newDF)-2)), "Prediction")
+      
+    
+ 
+      
+      output$summary <- renderPrint({ #Data check
+        if (is.null(l$prediction)) return (NULL)
+        outStr <- cat("If our Fitted Vs Residuals graph shows a fairly even distribution above and below the 0 line then we can reasonably assume our model is accurate.", "\n")
+        outStr <- cat("If there is noticable clustering then it is possible that the model has a high variance or is not linear.", "\n")
+        outStr <- cat("To further understand the model please look at the table tab for a full breakdown of the weights of each variable and their effect on the predicted outcome")
+      })
+      output$plot <- renderPlot({
+        if (is.null(l$prediction)) return (NULL)
+        counter <- 2
+        par(mfrow = c(2,1)) #Create 2 data tables
+        par(mar = c(4,4,2,0))
+        #First Data Table shows distribution of normalized variables and their effect on predicted outcome 
+        plot(x = newDF$"Dependent_Variable", y = newDF$"Independent_Variable 1", ylim=c(0,1), pch = 1, col = "red",
+             xlab = "Dependent Variable", ylab = "Normalized Independent", main = "Distribution of predictor variables")
+        for (indVars in names(newDF[3:length(newDF)-1])){
+          points(newDF$"Dependent_Variable", newDF[[indVars]], pch = counter, col = counter)
+          counter <- counter + 1
+        }
+        legend("topright", c(paste("Independent Variable", 1:(ncol(newDF)-2))), pch = c(paste(1:(ncol(newDF)-2))), col = c(paste(1:(ncol(newDF)-2))))
+        
+        
+        #Second data table to show the observed vs residuals 
+        plot(x = newDF$"Prediction", y = plotDF$"Residual", xlab = "Fitted Values", ylab = "Standardized Residuals",
+             main = "Fitted vs Residuals") 
+      #  abline(lm(newDF$"Prediction" ~ plotDF$"Residual"))
+        abline(0, 0)
+       
+          
+      })
+      output$table <- renderText({
+        if (is.null(l$prediction)) return (NULL)
+        newDF <- cbind(newDF, originalVar)
+        colnames(newDF) <- c("Dependent_Variable", paste(names(l$independentVars)), "Prediction", "Original")
+        
+      #  colnames(newDF) <- c("Dependent_Variable", paste("Independent_Variable", 1:(ncol(newDF)-3)), "Prediction", "Original")
+        paste(capture.output(newDF, row.names = FALSE), collapse = "\n")
+      })
+      output$table2 <- renderText({
+        if (is.null(l$prediction)) return (NULL)
+
+      })
     }
     #Cox Proportional Hazards Regression: Method of investing effects of multiple variables upon the timing of a specific event
     else if (l$analysisType == "Cox Proportional Hazards Regression"){
-      formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
-      cyclopsData <- createCyclopsData(formula,time = serverFrame[[l$dependent]], modelType = "cox", data = serverFrame)
+      serverFrame[is.na(serverFrame)] <- 0 #set NA values to 0
+      formDF <- names(l$dependentVars)[2:length(l$dependentVars)] #Get all dependent variables besides first one 
+      formula <- formula(paste(formDF, " ~ ", paste(names(l$independentVars), collapse = " + ")))
+
+      #Censor the data, remove data values where outcome result falls outside designated time window
+      #Getting the value from the user inputted pval (fix later)
+      censoredDF <- data.frame()
+      pVal <- l$pval
+      for (i in 1:nrow(serverFrame)){
+        tempVal <- serverFrame[i, 1]
+        if (tempVal <= pVal){
+          censoredDF <- rbind(censoredDF, serverFrame[i,])
+        }
+      }
+      
+      tempDep <- l$firstDependent
+      cyclopsData <- createCyclopsData(formula,time = serverFrame[[l$firstDependent]], modelType = "cox", data = serverFrame)
       cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
-     #coefficient <- coef(cyclopsFit) #coef might not be necessary, gives us x intercept and slope
+      coefficient <- coef(cyclopsFit) #coef might not be necessary, gives us x intercept and slope
       prediction <- predict(cyclopsFit)
       l$prediction <- prediction
+      
+      print(length(prediction))
+     print(summary(cyclopsData))
+      print(coefficient)
+      #print(coefficient)
+      #print(prediction)
+      
+      
+      hazardRatio <- data.frame()
+      counter <- 1
+      #calculate the hazard ratio
+      for (names in names(l$independentVars)){
+        print(exp(coefficient[counter]))
+        hazardRatio[counter, ] <- exp(coefficient[counter])
+        counter <- counter + 1
+      }
+      
+      print(hazardRatio)
+      
+      
+      
+      output$plot <- renderPlot({
+        if (is.null(l$prediction)) return (NULL)
+      #  hr_plot(dependent = cyclopsData, explanatory = formDF)
+      })
+      
       output$summary <- renderPrint({ #Data check, prints summary of predictions to UI
         if (is.null(l$prediction)) return (NULL)
-        paste(summary(l$prediction))
+        # If hazard ratio == 1 no correlation, if > 1 increased risk, <1 decreased risk 
       })
     }
     #Logistic Regression: Models probability of a dependent event occurring based on independent variables
@@ -305,17 +435,51 @@ server <- function(input, output, session) {
       formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
       cyclopsData <- createCyclopsData(formula, modelType = "lr", data = serverFrame)
       cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
-      #coefficient <- coef(cyclopsFit) #might not be necessary
-      
-      #Struggled to get confint to work, not required but useful for analysis. Gives confidence interval for each variable
-      #Function could not find matching covariates, will revisit if time permits
-      #confidence <- confint(cyclopsFit, names(l$independentVars)) 
-
+      coefficient <- coef(cyclopsFit, rescale = FALSE, ignoreConvergence = TRUE) 
+      l$coefficient <- coefficient
       prediction <- predict(cyclopsFit)
       l$prediction <- prediction
+      countID <- 1
+      yes_frame <- data.frame(Instance = numeric(0), Confidence_Percentage = numeric(0))
+      no_frame <- data.frame(Instance = numeric(0), Confidence_Percentage = numeric(0))
+      for (variable in 1:nrow(serverFrame)){
+        if (l$prediction[countID] >= .5){
+          yes_frame[nrow(yes_frame)+1, ] <- c(Instance = countID, Confidence_Percentage = l$prediction[countID])
+        }
+        else{
+          no_frame[nrow(no_frame)+1, ] <- c(Instance = countID, Confidence_Percentage = l$prediction[countID])
+        }
+        countID <- countID + 1
+      }
       output$summary <- renderPrint({ #Data check
         if (is.null(l$prediction)) return (NULL)
-        paste(summary(l$prediction))
+        strOut <- "There are "
+        strOut <- cat(strOut, nrow(yes_frame), " True predictions and ", nrow(no_frame), " False predictions")
+        countVar <- 1
+        for (var in names(l$independentVars)){
+          if (l$coefficient[countVar] > 0 ){
+            strOut <- cat("\n", var, " has a positive correlation with ", names(l$dependentVars[1]))
+          }
+          else{
+            strOut <- cat("\n", var, " does not seem to be correlated with ", names(l$dependentVars[1]))
+          }
+          countVar <- countVar + 1
+        }
+      })
+      output$plot <- renderPlot({
+        if (is.null(l$prediction)) return (NULL)
+        combined_frame <- rbind(yes_frame, no_frame)
+        combined_frame$Predictions <- c(rep("True Prediction", nrow(yes_frame)), rep("False Prediction", nrow(no_frame)))
+        ggplot(data = combined_frame, aes(x=Predictions, y = Confidence_Percentage)) + geom_boxplot() + geom_jitter()
+      })
+      output$table <- renderText({
+        if (is.null(l$prediction)) return (NULL)
+        paste("True Predictions:", capture.output(print(yes_frame, row.names = FALSE)), collapse = "\n")
+         })
+      output$table2 <- renderText({
+        if (is.null(l$prediction)) return (NULL)
+        paste("False Predictions:", capture.output(print(no_frame, row.names = FALSE)), collapse = "\n")
+        
       })
     }
   })
