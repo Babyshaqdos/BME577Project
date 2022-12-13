@@ -400,29 +400,42 @@ server <- function(input, output, session) {
       prediction <- predict(cyclopsFit)
       l$prediction <- prediction
       
-      print(length(prediction))
-     print(summary(cyclopsData))
-      print(coefficient)
+    #  print(length(prediction))
+    # print(summary(cyclopsData))
+    #  print(coefficient)
       #print(coefficient)
-      #print(prediction)
+    
+     # print(prediction)
       
       
       hazardRatio <- data.frame()
       counter <- 1
       #calculate the hazard ratio
       for (names in names(l$independentVars)){
-        print(exp(coefficient[counter]))
-        hazardRatio[counter, ] <- exp(coefficient[counter])
+      #  print(exp(coefficient[counter]))
+        tempDFMerge <- exp(coefficient[counter])
+        hazardRatio <-rbind(hazardRatio, tempDFMerge)
+        print(hazardRatio)
         counter <- counter + 1
       }
       
       print(hazardRatio)
-      
-      
+      testFrame <- data.frame(Predictor = names(l$independentVars), HR = hazardRatio[1:nrow(hazardRatio),])
+      print(testFrame)
       
       output$plot <- renderPlot({
         if (is.null(l$prediction)) return (NULL)
       #  hr_plot(dependent = cyclopsData, explanatory = formDF)
+        #autoplot(cyclopsFit)
+        
+        ggplot(testFrame, aes(x=Predictor, y = HR)) +
+          geom_point() +
+          geom_line() 
+          
+        
+        
+        
+        #plot(cyclopsFit, hazard.params = list(xvar = "time", by = names(hazardRatio), alpha = 1, ylab = "Hazard Ratio"))
       })
       
       output$summary <- renderPrint({ #Data check, prints summary of predictions to UI
