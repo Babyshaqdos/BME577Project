@@ -16,6 +16,7 @@ library(RSQLite)
 library(remotes)
 library(tidyverse)
 library(gginference)
+library(shinyjs)
 library(rstatix)
 if (!requireNamespace("BiocManager", quietly = TRUE))
   install.packages("BiocManager")
@@ -60,6 +61,7 @@ ui <- fluidPage(
        selectInput("selectAnalysis", "Analysis to perform", c("ANOVA", "T-Test", "Linear Regression", "Logistic Regression",
                                                               "Poisson Regression", "Cox Proportional Hazards Regression")),
        actionButton('run', 'Run'),
+       actionButton('reset', 'Reset'),
       ),
       
       #This panel contains the plots, table, and qualitative analysis summary
@@ -91,9 +93,30 @@ server <- function(input, output, session) {
   l$dataplots <- list() #Holds the CSV files
   l$dependentVars <- list() #Holds the dependent variables
   l$independentVars <- list() #Holds the independent variables
-  l$firstIndependent <- NULL #Will want to revisit, used to hold the first independent variable to be used as criteria for joining of csv files
-  l$joiner <- NULL
-  l$pval <- NULL
+  l$firstIndependent <- NULL #used to hold the first independent variable to be used as criteria for joining of csv files
+  l$joiner <- NULL #holds the column name upon which to merge csvs
+  l$pval <- NULL #holds the p value specified by the user
+  
+  
+  #Observer that resets all UI elements and Server variables when reset button clicked
+  observeEvent(input$reset, {
+    reset("inputDataText")
+    reset("variable1")
+    reset("variable2")
+    reset("pvalue")
+    reset("joinVar")
+    reset("independentVars")
+    reset("dependentVars")
+    reset("datasets")
+    l$dataplots <- list()
+    l$dependentVars <- list()
+    l$independentVars <- list()
+    l$firstIndependent <- NULL
+    l$joiner <- NULL
+    l$pval <- NULL
+    serverFrame <- data.frame()
+  })
+  
   
   #Observer to watch the save dataset button, adds the filepath to a list then reads the CSV and places it into the list
   observeEvent(input$Add_dataset, { 
@@ -147,8 +170,6 @@ server <- function(input, output, session) {
   
   #Puts an observer pattern on the run button, performs most functional requirements 
   observeEvent(input$run, {
-
-  #  l$plot <- input$plot
     l$analysisType <- input$selectAnalysis #Gets the user selected analysis option and assigns it to a server side variable
     
     #Loop through our list of csv files, read them into a data frame then merge them by the first user input independent variable
@@ -167,7 +188,7 @@ server <- function(input, output, session) {
         count <- 1
       }
       else{
-        if (is.null(l$joiner)){
+        if (is.null(l$joiner)){ #checks that we are provided a column to merge on
           stop("Did not indicate the columns to merge on")
         }
         serverFrame <<- merge(serverFrame, df2, by = l$joiner)
@@ -193,17 +214,17 @@ server <- function(input, output, session) {
           "We conclude that the independent variable does seem to have an affect on the dependent variable.", sep = '\n')
         }
       })
-      output$table <- renderPrint({
+      output$table <- renderText({
         if (is.null(l$anova)) return (NULL)
-        anova_table <- as.data.frame(summary(anova)[[1]])
-        paste(anova_table)
+        paste(capture.output(summary(anova)), collapse = "\n")
+        
         
       })
       output$plot <- renderPlot({
         if (is.null(l$anova)) return (NULL)
-        par(mfrow=c(2,2))
+       # par(mfrow=c(2,2))
         plot(anova)
-        par(mfrow=c(1,1))
+      #  par(mfrow=c(1,1))
       })
     }
     #Test Data: weight.csv (1 sample t test)
@@ -239,9 +260,11 @@ server <- function(input, output, session) {
         if (is.null(l$t_test)) return (NULL)
         plot(tPlot)
       })
-      output$table <- renderPrint({
+      output$table <- renderText({
         if (is.null(l$t_test)) return (NULL)
-        paste(l$t_test)
+        #paste(l$t_test)
+        paste(capture.output(l$t_test), collapse = "\n")
+        
       })
     }
     #Test Data: Social Network Ads
@@ -358,7 +381,6 @@ server <- function(input, output, session) {
         #Second data table to show the observed vs residuals 
         plot(x = newDF$"Prediction", y = plotDF$"Residual", xlab = "Fitted Values", ylab = "Standardized Residuals",
              main = "Fitted vs Residuals") 
-      #  abline(lm(newDF$"Prediction" ~ plotDF$"Residual"))
         abline(0, 0)
        
           
@@ -367,15 +389,10 @@ server <- function(input, output, session) {
         if (is.null(l$prediction)) return (NULL)
         newDF <- cbind(newDF, originalVar)
         colnames(newDF) <- c("Dependent_Variable", paste(names(l$independentVars)), "Prediction", "Original")
-        
-      #  colnames(newDF) <- c("Dependent_Variable", paste("Independent_Variable", 1:(ncol(newDF)-3)), "Prediction", "Original")
         paste(capture.output(newDF, row.names = FALSE), collapse = "\n")
       })
-      output$table2 <- renderText({
-        if (is.null(l$prediction)) return (NULL)
-
-      })
     }
+    #Sample Data: echocardiogram.csv
     #Cox Proportional Hazards Regression: Method of investing effects of multiple variables upon the timing of a specific event
     else if (l$analysisType == "Cox Proportional Hazards Regression"){
       serverFrame[is.na(serverFrame)] <- 0 #set NA values to 0
@@ -394,53 +411,71 @@ server <- function(input, output, session) {
       }
       
       tempDep <- l$firstDependent
-      cyclopsData <- createCyclopsData(formula,time = serverFrame[[l$firstDependent]], modelType = "cox", data = serverFrame)
+      cyclopsData <- createCyclopsData(formula,time = censoredDF[[l$firstDependent]], modelType = "cox", data = censoredDF)
       cyclopsFit <- fitCyclopsModel(cyclopsData, prior = createPrior("none"))
-      coefficient <- coef(cyclopsFit) #coef might not be necessary, gives us x intercept and slope
+      coefficient <- coef(cyclopsFit) 
       prediction <- predict(cyclopsFit)
       l$prediction <- prediction
-      
-    #  print(length(prediction))
-    # print(summary(cyclopsData))
-    #  print(coefficient)
-      #print(coefficient)
-    
-     # print(prediction)
       
       
       hazardRatio <- data.frame()
       counter <- 1
       #calculate the hazard ratio
       for (names in names(l$independentVars)){
-      #  print(exp(coefficient[counter]))
         tempDFMerge <- exp(coefficient[counter])
         hazardRatio <-rbind(hazardRatio, tempDFMerge)
-        print(hazardRatio)
         counter <- counter + 1
       }
       
-      print(hazardRatio)
-      testFrame <- data.frame(Predictor = names(l$independentVars), HR = hazardRatio[1:nrow(hazardRatio),])
-      print(testFrame)
+
+      #Create data frame to hold the independent variables and hazard ratios for each to be displayed in a plot
+      plotFrame <- data.frame(Predictor = names(l$independentVars), HR = hazardRatio[1:nrow(hazardRatio),])
       
+
+      #Data frame containing all the independent variable names
+      varFrame <- data.frame(names(l$independentVars))
+      
+      #Places coefficients into data frame
+      coefFrame <- data.frame()
+      for (varcof in coefficient){
+        coefFrame <- rbind(coefFrame, varcof)
+      }
+
+      #Binds variable names, coefficients, and hazard ratio into a data frame to be printed to table
+      summaryFrame <- data.frame()
+      summaryFrame <- data.frame(Variables = varFrame, Coefficients = coefFrame, Hazard_Ratios = hazardRatio)
+      colnames(summaryFrame) <- c("Variables", "Coefficients", "Hazard Ratios")
+
       output$plot <- renderPlot({
         if (is.null(l$prediction)) return (NULL)
-      #  hr_plot(dependent = cyclopsData, explanatory = formDF)
-        #autoplot(cyclopsFit)
-        
-        ggplot(testFrame, aes(x=Predictor, y = HR)) +
-          geom_point() +
-          geom_line() 
+        ggplot(plotFrame, aes(x=Predictor, y = HR)) +
+          geom_point()
           
-        
-        
-        
-        #plot(cyclopsFit, hazard.params = list(xvar = "time", by = names(hazardRatio), alpha = 1, ylab = "Hazard Ratio"))
       })
+      l$coefficients <- coefficients 
+      output$table <- renderText({
+         if (is.null(l$prediction)) return (NULL)
+         paste(capture.output(print(summaryFrame, row.names = FALSE)), collapse = "\n")
+        
+      })
+    
       
       output$summary <- renderPrint({ #Data check, prints summary of predictions to UI
         if (is.null(l$prediction)) return (NULL)
-        # If hazard ratio == 1 no correlation, if > 1 increased risk, <1 decreased risk 
+        # If hazard ratio == 1 no correlation, if > 1 increased risk, <1 decreased risk
+        varCount <- 1
+        for (variable in 1:nrow(hazardRatio)){
+          if (hazardRatio[variable, ] > 1){
+            cat(names(l$independentVars)[varCount], " has a hazard ratio of ", hazardRatio[variable, ], " which is greater than 1, indicating an increased risk", "\n")
+          }
+          else if (hazardRatio[variable, ] < 1){
+            cat(names(l$independentVars)[varCount], " has a hazard ratio of ", hazardRatio[variable, ], " which is less than 1, indicating a decreased risk", "\n")
+          }
+          else{
+            cat(names(l$independentVars)[varCount], " has a hazard ratio of ", hazardRatio[variable, ], " which indicates no correlation with risk", "\n")
+          }
+          varCount <- varCount + 1
+        } 
       })
     }
     #Logistic Regression: Models probability of a dependent event occurring based on independent variables
