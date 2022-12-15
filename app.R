@@ -20,8 +20,8 @@ library(shinyjs)
 library(rstatix)
 if (!requireNamespace("BiocManager", quietly = TRUE))
   install.packages("BiocManager")
+  BiocManager::install("survcomp")
 
-#BiocManager::install("survcomp")
 library(survcomp)
 library(finalfit)
 library(sandwich)
@@ -53,7 +53,7 @@ ui <- fluidPage(
        tags$h3('Please enter your variables and save after each one'),
        textInput('variable1', 'Independent Variable'),
        textInput('variable2', 'Dependent Variables'),
-       textInput('pvalue', 'P-Value/Mean (if necessary)'),
+       textInput('pvalue', 'P-Value/Mean/Cut Off (if necessary)'),
        textInput('joinVar', 'Column name to join on'),
        actionButton("Add_variables", "Save variables in program", size = "sm", color="warning"),
        verbatimTextOutput(outputId = "independentVars"),
@@ -180,7 +180,7 @@ server <- function(input, output, session) {
         stop("File not found, please check file path") #Prints the message to the R Studio console and stops program
       }
       #Reads csv and places into a data frame
-      df <- read.csv(csv)   
+      df <- read.csv(csv, check.names = FALSE)   
       df2 <- data.frame(df)
       #Adds data frame to serverFrame
       if (count == 0){ 
@@ -191,6 +191,8 @@ server <- function(input, output, session) {
         if (is.null(l$joiner)){ #checks that we are provided a column to merge on
           stop("Did not indicate the columns to merge on")
         }
+        #print(serverFrame)
+        print(df2)
         serverFrame <<- merge(serverFrame, df2, by = l$joiner)
       }
     }
@@ -227,23 +229,24 @@ server <- function(input, output, session) {
       #  par(mfrow=c(1,1))
       })
     }
-    #Test Data: weight.csv (1 sample t test)
+    #Test Data: LungCapData (1 sample t test)
     #T-Test: Determines whether the means of two groups (sampled with normal distributions with equal variance) are equivalent
     else if (l$analysisType == "T-Test"){
-      if (is.null(l$pval) || l$pval == ""){ #If no mean is given, 2 sample test is assumed
-        var1 <- l$independentVars[[1]]
-        var2 <- l$independentVars[[2]]
-        t_test <- t.test(serverFrame[[var1]], serverFrame[[var2]], paired = TRUE)
-        tPlot <- ggboxplot(serverFrame, x = var1, y = var2, ylab = var2, xlab = var1, add = "jitter")
-      }
-      else{ #If mean given, 1 sample test is assumed
+     # if (is.null(l$pval) || l$pval == ""){ #If no mean is given, 2 sample test is assumed
+        # Not working, idk why. Throws an error that there are NA values despite me omitting them. Ran out of time (and patience) to debug
+      #  var1 <- l$independentVars[[1]]
+      #  var2 <- l$independentVars[[2]]
+      #  t_test <- t.test(na.omit(serverFrame[[var1]]), na.omit(serverFrame[[var2]]))
+      #  tPlot <- ggboxplot(serverFrame, x = var1, y = var2, ylab = var2, xlab = var1, add = "jitter")
+      #}
+      #else{ #If mean given, 1 sample test is assumed
         var3 <- l$independentVars[[1]]
         meanVal <- l$pval
         t_test <- t.test(as.numeric(serverFrame[[var3]]), mu = as.numeric(meanVal))
         tPlot <- ggdensity(serverFrame, x = var3, rug = TRUE, fill = 'lightgray') +
           scale_x_discrete(limits = c(0, length(serverFrame[[var3]]))) + stat_central_tendency(type = "mean", color = "red", linetype = "dashed") +
           geom_vline(xintercept = meanVal, color = "blue", linetype = "dashed")
-      }
+    #  }
       l$t_test <- t_test
       output$summary <- renderText({
         if (is.null(l$t_test)) return (NULL)
@@ -267,7 +270,7 @@ server <- function(input, output, session) {
         
       })
     }
-    #Test Data: Social Network Ads
+    #Test Data: marketing_budget
     #Linear Regression: Analyses relationship between independent variable and 1 or more dependent variable 
     else if (l$analysisType == "Linear Regression"){
       formula <- formula(paste(names(l$dependentVars), " ~ ", paste(names(l$independentVars), collapse = " + ")))
@@ -310,7 +313,7 @@ server <- function(input, output, session) {
         paste(strOutput, varStr, sep = "\n")
       })
     }
-    #Test Data: framingham
+    #Test Data: data (or framingham/other logistic regression sets)
     #Poisson Logistic Regression: Similar to logistic regression but used when the outcome variable (dependent) is a count or rate of an event
     else if (l$analysisType == "Poisson Regression"){
       serverFrame[is.na(serverFrame)] <- 0
