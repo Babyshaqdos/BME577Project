@@ -27,3 +27,14 @@ Poisson Regression - 1 continous dependent variable and any number of independen
 Cox proportional hazards regression - 2 dependent variables where the first variable contains the time series information and the second is the prediction variable, any number of independent variables, and a cut off value
 
 If adding multiple CSV files then you must specify the column name (that is present in all CSV files) to merge the datasets by
+
+
+
+
+Some packages may need to be installed, these can be installed via the function:
+install.packages("nameofpackage")
+
+If running for the first time please run these commands, or uncomment them at the top of the R script
+install_github("ohdsi/Hades", upgrade = "always") 
+BiocManager::install("survcomp")
+
